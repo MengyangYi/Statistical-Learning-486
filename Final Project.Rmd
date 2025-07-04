@@ -1,0 +1,275 @@
+---
+title: "Final Project"
+author: "Yaxuan Shi,Xiaozhe Shao, Weiming Hao, Mengyang Yi"
+date: "2025-07-03"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(corrplot)
+library(dplyr)
+library(magrittr)
+```
+
+## Load data
+```{r warning=FALSE}
+math<- read.csv("student-mat.csv", header=TRUE)
+```
+
+Data we selected:https://www.kaggle.com/datasets/uciml/student-alcohol-consumption/
+
+## Check the missing value & outlier
+```{r warning=FALSE}
+sum(is.na(data))
+boxplot(math$G3, main="Boxplot for Final Grade (G3)")
+ggplot(math, aes(x=G3)) + geom_histogram(bins=30)
+
+
+Q <- quantile(math$G3, probs=c(.25, .75), na.rm = FALSE)
+IQR <- IQR(math$G3)
+Lower <- Q[1] - 1.5*IQR
+Upper <- Q[2] + 1.5*IQR 
+
+math_no_outlier <- subset(math, math$G3 > Lower & math$G3 < Upper)
+```
+
+## Convert to numerical variables
+```{r}
+math[] <- lapply(math, function(x) if(is.factor(x) | is.character(x)) as.numeric(as.factor(x)) else x)
+math[] <- lapply(math, function(x) if(is.integer(x)) as.numeric(x) else x)
+
+```
+
+## Correlation
+```{r}
+cor_matrix <- cor(math) 
+corrplot(cor_matrix, method = "circle")
+
+#relationship between G1,G2 and G3
+ggplot(math, aes(x=G1, y=G3)) + geom_point()
+pairs(math[c("G1", "G2", "G3")], pch = 19, cex = 0.5, col = "blue")
+
+```
+
+## Conclusion:
+1:Strong Positive Correlations: 
+  'G3' has a strong positive correlation with 'G1' and 'G2', 
+   which likely represent grades at different time points (e.g., 
+   first and second term grades). This indicates that students who 
+   perform well in earlier assessments tend to also perform well in later ones.
+
+2:Moderate Correlations: 
+  There might be moderate correlations between 'G3' and other educational factors 
+  such as 'studytime', 'Medu' , and 'Fedu', although these are less pronounced than 
+  the correlations with 'G1' and 'G2'.
+
+3:Weak or No Correlation: 
+  'G3' seems to have weak or no correlation with demographic factors like 
+  'sex', 'traveltime', and 'famsize'. This suggests that these factors may 
+  not have a strong direct impact on the final grade 'G3'.
+  
+4:Negative Correlations: 
+  There may be a negative correlation between 'G3' and 'failures', 
+  indicating that students with prior failures tend to score lower on 'G3'.
+
+Based on the correlation matrix provided, 'G1' and 'G2' would be strong candidates for inclusion in the KNN model for predicting 'G3' due to their strong positive correlation with the target variable. 
+
+
+## KNN
+```{r}
+n = nrow(math)
+features = c ("G1","G2","studytime","failures","Medu","Fedu") 
+Y = math$G3
+X = math[,features]
+p = ncol(X)
+
+X_stan = matrix(0, n, p)
+for (j in 1:p){
+  X_stan[, j] = (X[, j] - mean(X[, j]))/sd(X[, j])
+}
+
+n_test = 100
+n_train = 295
+
+Y_test = Y[1:n_test]
+Y_train = Y[(n_test+1):(n_test+n_train)]
+X_test = X_stan[1:n_test, ]
+X_train = X_stan[(n_test+1):(n_test+n_train), ]
+
+K = 5 #In this code, 'K' is set to 5.
+Y_pred = rep(0, n_test)
+
+for (j in 1:n_test){
+  all_distances = rep(0, n_train)
+  for (i in 1:n_train){
+    all_distances[i] = sqrt( sum( (X_train[i, ] - X_test[j, ])^2 ) )
+  }
+  dist_order = order(all_distances)
+  Y_pred[j] = mean( Y_train[dist_order[1:K]] )
+}
+```
+
+### Evaluate test error for KNN
+```{r}
+
+test_error = sqrt(mean( (Y_test - Y_pred)^2 ))
+baseline_error = sqrt(mean( (Y_test - mean(Y_train))^2 ))
+print("Test Error of KNN and Baseline Error")
+print(c(test_error, baseline_error))
+
+```
+
+## Conclusion:
+The test error of the KNN model is approximately 1.9886, while the baseline error is approximately 3.7551. The KNN model performs better than the baseline model. This suggests that the KNN model has learned some meaningful relationships between the selected features and the target variable 'G3', allowing it to make more accurate predictions compared to a simple mean prediction. The choice of the value of 'K' (number of nearest neighbors) is crucial for KNN. 
+
+
+## lasso
+```{r warning=FALSE}
+lasso <- function(X, Y, lambda){
+  maxiter = 10000
+  
+  p = ncol(X)
+  n = nrow(X)
+  L = 2*eigen(t(X) %*% X)$values[1]
+  
+  XtX = t(X) %*% X
+  XtY = t(X) %*% Y
+  
+  beta = rep(0, p)
+  
+  for (t in 1:maxiter){
+    stepsize = 2/L
+    beta_prime = beta - stepsize*(XtX %*% beta - XtY)
+    
+    beta_new = c(beta_prime[1], softThresh(beta_prime[2:p], lambda/L))
+    
+    if (sum((beta_new - beta)^2) < 1e-12)
+      break
+    else
+      beta = beta_new
+  }
+  
+  return(beta_new)
+}
+
+softThresh <- function(u, lambda){
+  u[abs(u) <= lambda] = 0
+  u[u > lambda] = u[u > lambda] - lambda
+  u[u < -lambda] = u[u < -lambda] + lambda
+  return(u)
+}
+
+set.seed(1)
+math1 = math[sample(1:nrow(math), nrow(math)), ] #?
+
+
+words = c("sex","age","address","famsize","Pstatus","Medu","Fedu","Mjob","Fjob","reason","guardian",
+          "traveltime","studytime","failures","schoolsup","famsup","paid","activities","nursery",
+          "higher","internet","romantic","famrel","freetime","goout","Dalc","Walc","health","absences",
+          "G1","G2")
+
+## Standardization 
+
+n = nrow(math)
+
+Y = math$G3
+X = math[, c(words)]
+
+X = cbind(rep(1,n), as.matrix(X))
+
+p = ncol(X)
+
+for (j in 2:p){
+  X[, j] = (X[, j] - mean(X[, j]))/sd(X[, j])
+}
+
+set.seed(1)
+
+reorder = sample(1:n, n, replace=FALSE)
+
+X = X[reorder, ]
+Y = Y[reorder]
+
+n_learn = 295
+n_test = 100
+
+
+Y_test = Y[1:n_test]
+Y_learn = Y[(n_test+1):(n_test+n_learn)]
+
+X_test = X[1:n_test, ]
+X_learn = X[(n_test+1):(n_test+n_learn), ]
+
+candidate_set = c(0.5, 2^seq(1, 9, 0.2))
+
+K = 5
+
+folds = matrix(1:n_learn, K)
+
+validerr = matrix(0, K, length(candidate_set))
+numvars = matrix(0, K, length(candidate_set))
+
+for (k in 1:K){
+  valid_ix = folds[k, ]
+  train_ix = setdiff(1:n_learn, folds[k, ])
+  
+  X_valid = X_learn[valid_ix, ]
+  X_train = X_learn[train_ix, ]
+  
+  Y_valid = Y_learn[valid_ix]
+  Y_train = Y_learn[train_ix]
+  
+  for (j in 1:length(candidate_set)){
+    
+    lambda = candidate_set[j]
+    
+    beta_lambda = lasso( X_train, Y_train, lambda )
+    
+    Y_lambda = X_valid %*% beta_lambda
+    
+    numvars[k, j] = sum(abs(beta_lambda) > 0)
+    validerr[k, j] = sqrt( mean( (Y_valid - Y_lambda)^2 ) )
+  }
+}
+  
+mean_numvars = apply(numvars, 2, mean)
+mean_validerrs = apply(validerr, 2, mean)
+  
+print("Num of non-zero coefs vs. CV error:")
+print(cbind(mean_numvars, mean_validerrs))
+
+min_ix = which.min( mean_validerrs )
+
+lambda_best = candidate_set[ min_ix ]
+
+beta_lambda = lasso(X_learn, Y_learn, lambda_best)
+
+Y_pred = X_test %*% beta_lambda
+
+print("Lasso coefficient using lambda chosen by CV")
+print( cbind(beta_lambda, c("intercept", words, "G3")) )
+
+print("Num of non-zero in lasso vs. total num of features")
+print( c(sum(abs(beta_lambda) > 0), p) )
+
+Y_pred2 = mean(Y_learn) # baseline prediction
+```
+
+With this optimal lambda, the model calculates the coefficients for each feature. The coefficients show the impact of each variable on the response variable (G3).Non-zero coefficients represent features that are important in predicting the final grade, while zero coefficients indicate features that the model deemed irrelevant.The lasso model selected 13 features out of the total 32 as relevant (non-zero coefficients). This demonstrates the feature selection capability of lasso regression, which helps in making the model more interpretable.
+
+
+### Evaluate test error for Lasso
+```{r}
+lasso_test_error = sqrt( mean( (Y_test - Y_pred)^2 ) )
+baseline_error = sqrt( mean( (Y_test - Y_pred2 )^2 ) )
+
+print("Test Error of (1) Lasso and (2) baseline")
+print(c(lasso_test_error, baseline_error))
+```
+
+## Conclusion
+Comparing this to the test error for the lasso model (approximately 1.858
+from your earlier message), we can conclude that the lasso model performs slightly better than the KNN model with the selected features on this dataset.
+
